@@ -1,0 +1,89 @@
+name: Despliegue del Sistema de Inventario
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Versión que se desplegará"
+        required: true
+        type: string
+        default: "v1.0.0"
+      asset_name:
+        description: "Nombre exacto del archivo ZIP"
+        required: true
+        type: string
+      python_version:
+        description: "Versión de Python"
+        required: true
+        type: string
+        default: "3.12"
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Preparar despliegue en Windows
+    runs-on: windows-latest
+
+    steps:
+      - name: Descargar versión liberada
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          ASSET_NAME: ${{ inputs.asset_name }}
+        run: |
+          New-Item -ItemType Directory -Force -Path paquete
+          gh release download $env:RELEASE_TAG `
+            --repo $env:GITHUB_REPOSITORY `
+            --pattern $env:ASSET_NAME `
+            --dir paquete
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Verificar Python
+        run: python --version
+
+      - name: Extraer paquete
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path despliegue
+          $zip = Get-ChildItem paquete -Filter *.zip |
+            Select-Object -First 1
+          if (-not $zip) {
+            throw "No se encontró el archivo ZIP"
+          }
+          Expand-Archive -LiteralPath $zip.FullName `
+            -DestinationPath despliegue -Force
+
+      - name: Instalar dependencias
+        shell: pwsh
+        run: |
+          $req = Get-ChildItem despliegue `
+            -Filter requirements.txt -Recurse |
+            Select-Object -First 1
+          if ($req) {
+            python -m pip install -r $req.FullName
+          } else {
+            Write-Host "No se encontró requirements.txt"
+          }
+
+      - name: Verificar archivos Python
+        run: python -m compileall -q despliegue
+
+      - name: Mostrar archivos desplegados
+        shell: pwsh
+        run: |
+          Get-ChildItem despliegue -Recurse
+
+      - name: Guardar artefacto de despliegue
+        uses: actions/upload-artifact@v4
+        with:
+          name: sistema-inventario-desplegado
+          path: despliegue/
+          if-no-files-found: error
+          retention-days: 7
